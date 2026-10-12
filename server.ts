@@ -510,68 +510,92 @@ Return ONLY valid JSON matching this schema:
   ]
 }`;
 
-      const ocrResponse = await ai.models.generateContent({
-        model: ocrModel,
-        contents: {
-          parts: [
-            {
-              inlineData: {
-                data: base64Content,
-                mimeType: mimeType || 'image/jpeg',
+      let ocrResponse;
+      try {
+        ocrResponse = await ai.models.generateContent({
+          model: ocrModel,
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  data: base64Content,
+                  mimeType: mimeType || 'image/jpeg',
+                },
               },
-            },
-            {
-              text: prompt,
-            },
-          ],
-        },
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              regions: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    box2d: {
-                      type: Type.ARRAY,
-                      items: { type: Type.INTEGER },
-                      description: "Normalized 2D box [ymin, xmin, ymax, xmax] on a 0 to 1000 scale"
-                    },
-                    originalText: {
-                      type: Type.STRING,
-                      description: "Exact Chinese text found in image"
-                    },
-                    targetText: {
-                      type: Type.STRING,
-                      description: "Standard Simplified Chinese translation"
-                    },
-                    isTraditional: {
-                      type: Type.BOOLEAN,
-                      description: "True if contains Traditional Chinese characters"
-                    },
-                    confidence: {
-                      type: Type.STRING,
-                      description: "high, medium, or low"
-                    },
-                    label: {
-                      type: Type.STRING,
-                      description: "Category label"
-                    }
-                  },
-                  required: ["box2d", "originalText", "targetText"]
-                }
-              }
-            },
-            required: ["regions"]
+              {
+                text: prompt,
+              },
+            ],
           },
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.LOW
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                regions: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      box2d: {
+                        type: Type.ARRAY,
+                        items: { type: Type.INTEGER },
+                        description: "Normalized 2D box [ymin, xmin, ymax, xmax] on a 0 to 1000 scale"
+                      },
+                      originalText: {
+                        type: Type.STRING,
+                        description: "Exact Chinese text found in image"
+                      },
+                      targetText: {
+                        type: Type.STRING,
+                        description: "Standard Simplified Chinese translation"
+                      },
+                      isTraditional: {
+                        type: Type.BOOLEAN,
+                        description: "True if contains Traditional Chinese characters"
+                      },
+                      confidence: {
+                        type: Type.STRING,
+                        description: "high, medium, or low"
+                      },
+                      label: {
+                        type: Type.STRING,
+                        description: "Category label"
+                      }
+                    },
+                    required: ["box2d", "originalText", "targetText"]
+                  }
+                }
+              },
+              required: ["regions"]
+            },
+            thinkingConfig: {
+              thinkingLevel: ThinkingLevel.LOW
+            }
           }
-        }
-      });
+        });
+      } catch (genErr: any) {
+        console.warn('OCR generateContent retry without thinkingConfig/responseSchema:', genErr?.message || genErr);
+        ocrResponse = await ai.models.generateContent({
+          model: ocrModel,
+          contents: {
+            parts: [
+              {
+                inlineData: {
+                  data: base64Content,
+                  mimeType: mimeType || 'image/jpeg',
+                },
+              },
+              {
+                text: prompt,
+              },
+            ],
+          },
+          config: {
+            responseMimeType: 'application/json'
+          }
+        });
+      }
 
       const rawText = ocrResponse.text || '';
       let parsedData: { regions?: any[] } = { regions: [] };
@@ -592,8 +616,26 @@ Return ONLY valid JSON matching this schema:
       const sanitizedRegions = (Array.isArray(parsedData.regions) ? parsedData.regions : [])
         .map((r: any, idx: number) => {
           if (!Array.isArray(r.box2d) || r.box2d.length !== 4) return null;
-          const [ymin, xmin, ymax, xmax] = r.box2d.map((val: any) => Math.max(0, Math.min(1000, Number(val) || 0)));
+          let [ymin, xmin, ymax, xmax] = r.box2d.map((val: any) => Number(val) || 0);
+
+          // If coordinates are on a 0.0 - 1.0 float scale, scale up to 0 - 1000
+          if (Math.max(ymin, xmin, ymax, xmax) <= 1.0 && (ymax > 0 || xmax > 0)) {
+            ymin = Math.round(ymin * 1000);
+            xmin = Math.round(xmin * 1000);
+            ymax = Math.round(ymax * 1000);
+            xmax = Math.round(xmax * 1000);
+          } else {
+            ymin = Math.max(0, Math.min(1000, Math.round(ymin)));
+            xmin = Math.max(0, Math.min(1000, Math.round(xmin)));
+            ymax = Math.max(0, Math.min(1000, Math.round(ymax)));
+            xmax = Math.max(0, Math.min(1000, Math.round(xmax)));
+          }
+
           if (ymax <= ymin || xmax <= xmin) return null;
+
+          const origText = String(r.originalText || '').trim();
+          const targetText = String(r.targetText || '').trim();
+
           return {
             id: `ocr_${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
             box2d: [ymin, xmin, ymax, xmax] as [number, number, number, number],
@@ -603,8 +645,8 @@ Return ONLY valid JSON matching this schema:
               width: ((xmax - xmin) / 1000) * 100,
               height: ((ymax - ymin) / 1000) * 100,
             },
-            originalText: String(r.originalText || '').trim(),
-            targetText: String(r.targetText || '').trim(),
+            originalText: origText,
+            targetText: targetText || origText,
             isTraditional: Boolean(r.isTraditional !== false),
             confidence: String(r.confidence || 'high'),
             label: String(r.label || '文字區域'),

@@ -285,15 +285,16 @@ export default function App() {
   // Single item OCR scanning function
   const runOcrScanForItem = async (
     item: UploadedFileItem, 
-    categoryRatio: '4:5' | '16:9' | '9:16',
+    categoryRatio?: '4:5' | '16:9' | '9:16',
     modelOverride?: string
   ): Promise<ManualAnnotation[]> => {
+    const targetRatio = item.aspectRatio || categoryRatio || '4:5';
     const modelToUse = modelOverride || assistantModel;
 
     // Mark as scanning and clear previous errors
     setUploads(prev => ({
       ...prev,
-      [categoryRatio]: prev[categoryRatio].map(it =>
+      [targetRatio]: (prev[targetRatio] || []).map(it =>
         it.id === item.id ? { ...it, ocrStatus: 'scanning', ocrError: undefined } : it
       )
     }));
@@ -338,7 +339,7 @@ export default function App() {
 
       setUploads(prev => ({
         ...prev,
-        [categoryRatio]: prev[categoryRatio].map(it => {
+        [targetRatio]: (prev[targetRatio] || []).map(it => {
           if (it.id !== item.id) return it;
           
           // Merge with any custom user-added annotations
@@ -390,14 +391,15 @@ export default function App() {
 
       return detectedRegions;
     } catch (err: any) {
+      clearTimeout(timeoutId);
       console.error('OCR scan failed:', err);
       setUploads(prev => ({
         ...prev,
-        [categoryRatio]: prev[categoryRatio].map(it =>
+        [targetRatio]: (prev[targetRatio] || []).map(it =>
           it.id === item.id ? { 
             ...it, 
             ocrStatus: 'error', 
-            ocrError: err.message || 'OCR 識別失敗' 
+            ocrError: err.name === 'AbortError' ? 'OCR 掃描超時，請點擊重新掃描' : (err.message || 'OCR 識別失敗') 
           } : it
         )
       }));
@@ -418,34 +420,28 @@ export default function App() {
       return;
     }
 
-    const newCreatedItems: UploadedFileItem[] = [];
+    const currentList = uploads[categoryRatio];
+    const availableSpace = 3 - currentList.length;
+    if (availableSpace <= 0) {
+      return;
+    }
 
-    setUploads(prev => {
-      const currentList = prev[categoryRatio];
-      const availableSpace = 3 - currentList.length;
-      if (availableSpace <= 0) return prev;
+    const filesToAdd: UploadedFileItem[] = validFiles.slice(0, availableSpace).map(f => ({
+      id: Math.random().toString(36).substring(2, 9),
+      file: f,
+      previewUrl: URL.createObjectURL(f),
+      aspectRatio: categoryRatio,
+      ocrStatus: autoOcrOnUpload ? 'scanning' : 'idle',
+    }));
 
-      const filesToAdd: UploadedFileItem[] = validFiles.slice(0, availableSpace).map(f => {
-        const itemObj: UploadedFileItem = {
-          id: Math.random().toString(36).substring(2, 9),
-          file: f,
-          previewUrl: URL.createObjectURL(f),
-          aspectRatio: categoryRatio,
-          ocrStatus: autoOcrOnUpload ? 'scanning' : 'idle',
-        };
-        newCreatedItems.push(itemObj);
-        return itemObj;
-      });
+    setUploads(prev => ({
+      ...prev,
+      [categoryRatio]: [...prev[categoryRatio], ...filesToAdd]
+    }));
 
-      return {
-        ...prev,
-        [categoryRatio]: [...currentList, ...filesToAdd]
-      };
-    });
-
-    // Auto-trigger OCR model for all newly added images
-    if (autoOcrOnUpload && newCreatedItems.length > 0) {
-      newCreatedItems.forEach(item => {
+    // Auto-trigger OCR model for all newly added images (guaranteed synchronous execution)
+    if (autoOcrOnUpload && filesToAdd.length > 0) {
+      filesToAdd.forEach(item => {
         runOcrScanForItem(item, categoryRatio);
       });
     }
