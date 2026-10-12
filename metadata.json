@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Photo Trans 繁簡圖片翻譯器",
+  "description": "上傳繁體中文圖片，調用 Gemini 3.8 Flash OCR 即時抓取繁體中文標題並轉譯簡體中文標題，再指揮 Nano Banana 家族模型精準生成 1K 簡體中文圖片（品牌 Logo 除外）。",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
